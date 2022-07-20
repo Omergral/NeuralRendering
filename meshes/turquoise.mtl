@@ -1,0 +1,5 @@
+# Created by Common Ground
+# Object Name: turquoise
+newmtl turquoise
+map_Kd turquoise.png 
+

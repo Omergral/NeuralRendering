@@ -1,0 +1,5 @@
+# Created by Common Ground
+# Object Name: green
+newmtl green
+map_Kd green.png 
+
