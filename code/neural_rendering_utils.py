@@ -4,16 +4,22 @@ import torch
 import random
 import numpy as np
 import torch.nn as nn
+from pathlib import Path
+from skimage import img_as_ubyte
+from object_detection import RGBDetection
+from pytorch3d.io import load_objs_as_meshes
 from pytorch3d.renderer import (look_at_view_transform, MeshRenderer,
                                 MeshRasterizer, FoVPerspectiveCameras,
                                 RasterizationSettings, SoftPhongShader,
-                                BlendParams, SoftSilhouetteShader)
+                                BlendParams, SoftSilhouetteShader, Materials, PointLights)
 
 
 class NeuralRenderingUtils:
 
-    def __init__(self, device: str = 'cuda', gaussian_filter_kernelsize: int = 15, gaussian_filter_sigma: int = 3,
-                 image_size: int = 256, cam_dist: float = 18.0, cam_azim: float = 0.0, cam_elev: float = 0.0):
+    def __init__(self, meshes_dir: str = None, device: str = 'cuda', gaussian_filter_kernelsize: int = 15,
+                 gaussian_filter_sigma: int = 3, image_size: int = 256, cam_dist: float = 18.0, cam_azim: float = 0.0,
+                 cam_elev: float = 0.0):
+        self.meshes_dir = '/home/nadav2/dev/data/mc-data/Omer/NeuralRendering/meshes'
         self.device = torch.device(device)
         self.kernel_size = gaussian_filter_kernelsize
         self.gaussian_sigma = gaussian_filter_sigma
@@ -23,15 +29,15 @@ class NeuralRenderingUtils:
         self.elev = cam_elev
 
     def get_gaussian_filter(self):
-        rng_seed = 102
-        cuda_seed = 102
-        np.random.seed(rng_seed)
-        random.seed(rng_seed)
-        os.environ['PYTHONHASHSEED'] = str(rng_seed)
-
-        torch.manual_seed(rng_seed)
-        torch.cuda.manual_seed(cuda_seed)
-        torch.cuda.manual_seed_all(cuda_seed)
+        # rng_seed = 102
+        # cuda_seed = 102
+        # np.random.seed(rng_seed)
+        # random.seed(rng_seed)
+        # os.environ['PYTHONHASHSEED'] = str(rng_seed)
+        #
+        # torch.manual_seed(rng_seed)
+        # torch.cuda.manual_seed(cuda_seed)
+        # torch.cuda.manual_seed_all(cuda_seed)
 
         # Create a x, y coordinate grid of shape (kernel_size, kernel_size, 2)
         x_cord = torch.arange(self.kernel_size)
@@ -65,6 +71,10 @@ class NeuralRenderingUtils:
         return gaussian_filter
 
     def get_renderers(self):
+        materials = Materials(device=self.device, ambient_color=[[1.0, 1.0, 1.0]], diffuse_color=[[0.0, 0.0, 0.0]],
+                              specular_color=[[0.0, 0.0, 0.0]], shininess=0.0)
+        lights = PointLights(device=self.device, ambient_color=((1.0, 1.0, 1.0),),
+                             specular_color=((0.0, 0.0, 0.0),), location=[[0.0, 0.0, 500.0]])
         cameras = FoVPerspectiveCameras(device=self.device)
         blend_params_RGB = BlendParams(sigma=1e-5, gamma=1e-5)
         blend_params_sil = BlendParams(sigma=1e-4, gamma=1e-4)
@@ -81,7 +91,8 @@ class NeuralRenderingUtils:
                 cameras=cameras,
                 raster_settings=raster_settings_RGB
             ),
-            shader=SoftPhongShader(device=self.device, cameras=cameras, blend_params=blend_params_RGB)
+            shader=SoftPhongShader(device=self.device, cameras=cameras, blend_params=blend_params_RGB,
+                                   lights=lights, materials=materials)
         )
         renderer_silhouette = MeshRenderer(
             rasterizer=MeshRasterizer(
@@ -108,7 +119,8 @@ class NeuralRenderingUtils:
                                           [0., self.dist / self.image_size, T[0][1]],
                                           [0., 0., 1.]], device=self.device)
         cam_intrinsic_mat_inv = cam_intrinsic_mat.inverse()
-        cam_intrinsic_mat_inv = torch.cat([cam_intrinsic_mat_inv, torch.tensor([[0., 0., 0.]], device=self.device).T], 1)
+        cam_intrinsic_mat_inv = torch.cat([cam_intrinsic_mat_inv, torch.tensor([[0., 0., 0.]], device=self.device).T],
+                                          1)
         cam_extrinsic_mat = torch.tensor([[-1., 0., 0., T.T[0]],
                                           [0., 1., 0., T.T[1]],
                                           [0., 0., -1., T.T[2]],
@@ -119,17 +131,30 @@ class NeuralRenderingUtils:
         return world_cor
 
     def get_initial_primitives_positions(self):
-        green_before = self.predict_world_coordinates(120 / self.image_size, 120 / self.image_size)
-        red_before = self.predict_world_coordinates(120 / self.image_size, 120 / self.image_size)
-        blue_before = self.predict_world_coordinates(120 / self.image_size, 120 / self.image_size)
-        return green_before, blue_before, red_before
+        assert self.meshes_dir is not None, 'must set the path to the meshes directory'
 
-    def get_predicted_translations(self, green_coord, red_coord, blue_coord):
-        green_init, blue_init, red_init = self.get_initial_primitives_positions()
-        green_after = self.predict_world_coordinates(green_coord[0] / self.image_size, green_coord[1] / self.image_size)
-        red_after = self.predict_world_coordinates(red_coord[0] / self.image_size, red_coord[1] / self.image_size)
-        blue_after = self.predict_world_coordinates(blue_coord[0] / self.image_size, blue_coord[1] / self.image_size)
-        green_translation = green_init - green_after
-        blue_translation = blue_init - blue_after
-        red_translation = red_init - red_after
-        return green_translation, blue_translation, red_translation
+        initial_positions = {}
+        rgb_rend, _ = self.get_renderers()
+        R, T = self.get_R_T()
+        for mesh_file in Path(self.meshes_dir).rglob('*.obj'):
+            color = mesh_file.parts[-1].replace('.obj', '')
+            mesh = load_objs_as_meshes([str(mesh_file)], device=self.device)
+            rend_img = rgb_rend(meshes_world=mesh, R=R, T=T).to(self.device)
+            object_detection = RGBDetection(img_as_ubyte(np.clip(rend_img.cpu()[0].numpy(), 0, 1)))
+            color_coords_dict = object_detection.get_coordinates()
+            x_initial, y_initial = color_coords_dict[color][:2]
+            color_initial_position = self.predict_world_coordinates(x_initial / self.image_size,
+                                                                    y_initial / self.image_size)
+            initial_positions[color] = color_initial_position
+
+        return initial_positions
+
+    def get_predicted_translations(self, coords_dict):
+        predicted_coords_dict = {}
+        initial_positions = self.get_initial_primitives_positions()
+        for color, position in coords_dict.items():
+            after_translation = self.predict_world_coordinates(position[0] / self.image_size,
+                                                               position[1] / self.image_size)
+            predicted_coords_dict[color] = initial_positions[color] - after_translation
+
+        return predicted_coords_dict

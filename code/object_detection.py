@@ -7,55 +7,50 @@ from pathlib import Path
 class RGBDetection:
 
     def __init__(self, image, output_path: str = None, visualize: bool = False):
-        if type(image) == str:
-            self.image = cv2.imread(image)
-        else:
-            self.image = image[:, :, :-1]
-        self.green_lower, self.green_upper = ((0, 100, 0), (100, 255, 100))
-        self.red_lower, self.red_upper = ((0, 0, 100), (100, 100, 255))
-        self.blue_lower, self.blue_upper = ((100, 0, 0), (255, 100, 100))
+        self.image = image[:, :, :3]
+        self.green_bound = (0, 255, 0)
+        self.red_bound = (255, 0, 0)
+        self.blue_bound = (0, 0, 255)
+        self.purple_bound = (100, 0, 100)
+        self.tuqruoise_bound = (0, 255, 255)
+        self.yellow_bound = (255, 255, 0)
+        self.orange_bound = (255, 153, 18)
         self.visualize = visualize
         self.out_path = Path(output_path) if output_path else None
+        self.colors = {'green': self.green_bound, 'red': self.red_bound, 'blue': self.blue_bound,
+                       'purple': self.purple_bound, 'yellow': self.yellow_bound, 'orange': self.orange_bound,
+                       'turquoise': self.tuqruoise_bound}
 
     def get_coordinates(self):
-        mask_cone = cv2.inRange(self.image, self.red_lower, self.red_upper)
-        mask_cube_blue = cv2.inRange(self.image, self.blue_lower, self.blue_upper)
-        mask_cube_green = cv2.inRange(self.image, self.green_lower, self.green_upper)
+        masks = {}
+        bound_coordinates = {}
 
-        x_cube_green, y_cube_green, w_cube_green, h_cube_green = cv2.boundingRect(mask_cube_green)
-        x_cube_blue, y_cube_blue, w_cube_blue, h_cube_blue = cv2.boundingRect(mask_cube_blue)
-        x_cone, y_cone, w_cone, h_cone = cv2.boundingRect(mask_cone)
+        for color, bound in self.colors.items():
+            masks[color] = cv2.inRange(self.image, bound, bound)
 
-        green_cube_coord = (x_cube_green, y_cube_green, w_cube_green, h_cube_green)
-        blue_cube_coord = (x_cube_blue, y_cube_blue, w_cube_blue, h_cube_blue)
-        red_cone_coord = (x_cone, y_cone, w_cone, h_cone)
+        for color, col_range in masks.items():
+            bound_coordinates[color] = cv2.boundingRect(col_range)
 
-        return green_cube_coord, blue_cube_coord, red_cone_coord
+        return bound_coordinates
 
     def draw_rects(self):
+        rect_coordinates = {}
+        color_coords = self.get_coordinates()
 
-        green_cube_coord, blue_cube_coord, red_cone_coord = self.get_coordinates()
-        green_cube_coord_start, green_cube_coord_end = ((green_cube_coord[0], green_cube_coord[1]),
-                                                        (green_cube_coord[0] + green_cube_coord[2],
-                                                         green_cube_coord[1] + green_cube_coord[3]))
-        blue_cube_coord_start, blue_cube_coord_end = ((blue_cube_coord[0], blue_cube_coord[1]),
-                                                      (blue_cube_coord[0] + blue_cube_coord[2],
-                                                       blue_cube_coord[1] + blue_cube_coord[3]))
-        cone_coord_start, cone_coord_end = ((red_cone_coord[0], red_cone_coord[1]),
-                                            (red_cone_coord[0] + red_cone_coord[2],
-                                             red_cone_coord[1] + red_cone_coord[3]))
+        for color, bound_coordinates in color_coords.items():
+            x, y, w, h = bound_coordinates
+            rect_coordinates[color] = ((x, y), (x + w, y + h))
 
         image_copy = self.image.copy()
 
-        cv2.rectangle(image_copy, cone_coord_start, cone_coord_end, (0, 0, 255))
-        cv2.rectangle(image_copy, blue_cube_coord_start, blue_cube_coord_end, (255, 0, 0))
-        cv2.rectangle(image_copy, green_cube_coord_start, green_cube_coord_end, (0, 255, 0))
+        for color, rect_coords in rect_coordinates.items():
+            cv2.rectangle(image_copy, rect_coords[0], rect_coords[1], (0, 0, 0))
 
-        plt.imshow(cv2.cvtColor(image_copy, cv2.COLOR_BGR2RGB))
+        plt.imshow(image_copy)
         plt.axis('off')
 
         if self.out_path:
-            cv2.imwrite(str(self.out_path / 'rects.png'), image_copy)
+            cv2.imwrite(str(self.out_path / 'rects.png'), cv2.cvtColor(image_copy, cv2.COLOR_BGR2RGB))
 
 
 if __name__ == '__main__':
@@ -75,7 +70,7 @@ if __name__ == '__main__':
 
     object_detector = RGBDetection(image=args.image, output_path=args.output_path, visualize=args.visualize)
 
-    green_cube_coord, blue_cube_coord, red_cone_coord = object_detector.get_coordinates()
+    color_coordinates = object_detector.get_coordinates()
 
     if args.visualize:
 
